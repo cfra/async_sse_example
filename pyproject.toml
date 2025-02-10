@@ -1,0 +1,21 @@
+[project]
+name = "async_sse_example"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "Christian Franke",email = "nobody@nowhere.ws"}
+]
+requires-python = ">=3.13"
+dependencies = [
+    "djangorestframework (>=3.15.2,<4.0.0)",
+    "adrf (>=0.1.9,<0.2.0)",
+    "gunicorn (>=23.0.0,<24.0.0)",
+    "uvicorn (>=0.34.0,<0.35.0)"
+]
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+package-mode = false
