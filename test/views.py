@@ -20,8 +20,8 @@ class ServerSentEventRenderer(BaseRenderer):
 
 
 async def example_events():
-    for i in range(10):
-        yield {"data": f"{i}\n\n"}
+    for i in range(5):
+        yield f"data: {i}\n\n"
         await asyncio.sleep(1)
 
 
@@ -30,3 +30,9 @@ class TestViewSet(ViewSet):
 
     async def list(self, request):
         return Response(example_events())
+
+
+async def test_view(request):
+    renderer = ServerSentEventRenderer()
+    data = example_events()
+    return renderer.render(data)
