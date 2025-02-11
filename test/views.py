@@ -1,4 +1,5 @@
 import asyncio
+import traceback
 
 from adrf.viewsets import ViewSet
 from django.http import StreamingHttpResponse
@@ -13,6 +14,7 @@ class ServerSentEventRenderer(BaseRenderer):
     media_type = 'text/event-stream'
     format = 'txt'
     def render(self, data, accepted_media_type=None, renderer_context=None):
+        traceback.print_stack()
         response = StreamingHttpResponse(data, content_type='text/event-stream')
         response['X-Accel-Buffering'] = 'no'
         response['Cache-Control'] = 'no-cache'
