@@ -126,3 +126,111 @@ Stack of `/test/` (what it actually looks like):
 ```
 
 So for some reason, part of `/test/`'s execution is dispatched into a thread, which is causing the observed issue.
+
+Dumping the stack of all threads from `/test/`'s execution, we see, there are indeed two threads, one being the pool thread with the stack shown above, and the other thread being the main thread executing gunicorn and waiting in its event loop for the thread to finish:
+
+```pdb
+(Pdb) for th in threading.enumerate():
+...     print(th)
+...     traceback.print_stack(sys._current_frames()[th.ident])
+...     print()
+<_MainThread(MainThread, started 128623502097344)>
+  File "/home/user/.cache/pypoetry/virtualenvs/async-sse-example-DQzT8392-py3.13/bin/gunicorn", line 8, in <module>
+    sys.exit(run())
+  File "/home/user/.cache/pypoetry/virtualenvs/async-sse-example-DQzT8392-py3.13/lib/python3.13/site-packages/gunicorn/app/wsgiapp.py", line 66, in run
+    WSGIApplication("%(prog)s [OPTIONS] [APP_MODULE]", prog=prog).run()
+  File "/home/user/.cache/pypoetry/virtualenvs/async-sse-example-DQzT8392-py3.13/lib/python3.13/site-packages/gunicorn/app/base.py", line 235, in run
+    super().run()
+  File "/home/user/.cache/pypoetry/virtualenvs/async-sse-example-DQzT8392-py3.13/lib/python3.13/site-packages/gunicorn/app/base.py", line 71, in run
+    Arbiter(self).run()
+  File "/home/user/.cache/pypoetry/virtualenvs/async-sse-example-DQzT8392-py3.13/lib/python3.13/site-packages/gunicorn/arbiter.py", line 201, in run
+    self.manage_workers()
+  File "/home/user/.cache/pypoetry/virtualenvs/async-sse-example-DQzT8392-py3.13/lib/python3.13/site-packages/gunicorn/arbiter.py", line 570, in manage_workers
+    self.spawn_workers()
+  File "/home/user/.cache/pypoetry/virtualenvs/async-sse-example-DQzT8392-py3.13/lib/python3.13/site-packages/gunicorn/arbiter.py", line 641, in spawn_workers
+    self.spawn_worker()
+  File "/home/user/.cache/pypoetry/virtualenvs/async-sse-example-DQzT8392-py3.13/lib/python3.13/site-packages/gunicorn/arbiter.py", line 608, in spawn_worker
+    worker.init_process()
+  File "/home/user/.cache/pypoetry/virtualenvs/async-sse-example-DQzT8392-py3.13/lib/python3.13/site-packages/uvicorn/workers.py", line 75, in init_process
+    super().init_process()
+  File "/home/user/.cache/pypoetry/virtualenvs/async-sse-example-DQzT8392-py3.13/lib/python3.13/site-packages/gunicorn/workers/base.py", line 143, in init_process
+    self.run()
+  File "/home/user/.cache/pypoetry/virtualenvs/async-sse-example-DQzT8392-py3.13/lib/python3.13/site-packages/uvicorn/workers.py", line 107, in run
+    return asyncio.run(self._serve())
+  File "/usr/lib/python3.13/asyncio/runners.py", line 194, in run
+    return runner.run(main)
+  File "/usr/lib/python3.13/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+  File "/usr/lib/python3.13/asyncio/base_events.py", line 707, in run_until_complete
+    self.run_forever()
+  File "/usr/lib/python3.13/asyncio/base_events.py", line 678, in run_forever
+    self._run_once()
+  File "/usr/lib/python3.13/asyncio/base_events.py", line 1995, in _run_once
+    event_list = self._selector.select(timeout)
+  File "/usr/lib/python3.13/selectors.py", line 452, in select
+    fd_event_list = self._selector.poll(timeout, max_ev)
+
+<Pool thread dropped for brevity as it has been already been included above.>
+```
+
+Listing the tasks pending in the main thread event loop by "clever" introspection:
+
+```pdb
+(Pdb) import asyncio
+(Pdb) import sys
+(Pdb) import threading
+(Pdb) main_thread = threading.enumerate()[0]
+(Pdb) pending_tasks = list(asyncio.all_tasks(sys._current_frames()[main_thread.ident].f_back.f_back.f_back.f_back.f_locals['self']._loop))
+(Pdb) print('\n'.join([ str(x) for x in pending_tasks]))
+<Task pending name='Task-4' coro=<RequestResponseCycle.run_asgi() running at /home/user/.cache/pypoetry/virtualenvs/async-sse-example-DQzT8392-py3.13/lib/python3.13/site-packages/uvicorn/protocols/http/h11_impl.py:403> wait_for=<Future pending cb=[Task.task_wakeup()]> cb=[set.discard()]>
+<Task pending name='Task-7' coro=<ASGIHandler.handle.<locals>.process_request() running at /home/user/.cache/pypoetry/virtualenvs/async-sse-example-DQzT8392-py3.13/lib/python3.13/site-packages/django/core/handlers/asgi.py:185> wait_for=<Future pending cb=[shield.<locals>._outer_done_callback() at /usr/lib/python3.13/asyncio/tasks.py:975, Task.task_wakeup()]> cb=[_wait.<locals>._on_completion() at /usr/lib/python3.13/asyncio/tasks.py:521]>
+<Task pending name='Task-1' coro=<UvicornWorker._serve() running at /home/user/.cache/pypoetry/virtualenvs/async-sse-example-DQzT8392-py3.13/lib/python3.13/site-packages/uvicorn/workers.py:102> wait_for=<Future pending cb=[Task.task_wakeup()]> cb=[_run_until_complete_cb() at /usr/lib/python3.13/asyncio/base_events.py:181]>
+<Task pending name='Task-6' coro=<ASGIHandler.listen_for_disconnect() running at /home/user/.cache/pypoetry/virtualenvs/async-sse-example-DQzT8392-py3.13/lib/python3.13/site-packages/django/core/handlers/asgi.py:235> wait_for=<Future pending cb=[Task.task_wakeup()]> cb=[_wait.<locals>._on_completion() at /usr/lib/python3.13/asyncio/tasks.py:521]>
+b
+```
+
+The interesting task seems to be "Task-7" as this is the only task that is different in a comparison to the working case.
+
+Dumping the stack of that task, we get:
+
+```
+(Pdb) asgi_task = [x for x in pending_tasks][1]
+(Pdb) asgi_task.print_stack()
+Stack for <Task pending name='Task-7' coro=<ASGIHandler.handle.<locals>.process_request() running at /home/user/.cache/pypoetry/virtualenvs/async-sse-example-DQzT8392-py3.13/lib/python3.13/site-packages/django/core/handlers/asgi.py:185> cb=[_wait.<locals>._on_completion() at /usr/lib/python3.13/asyncio/tasks.py:521]> (most recent call last):
+  File "/home/user/.cache/pypoetry/virtualenvs/async-sse-example-DQzT8392-py3.13/bin/gunicorn", line 8, in <module>
+    sys.exit(run())
+  File "/home/user/.cache/pypoetry/virtualenvs/async-sse-example-DQzT8392-py3.13/lib/python3.13/site-packages/gunicorn/app/wsgiapp.py", line 66, in run
+    WSGIApplication("%(prog)s [OPTIONS] [APP_MODULE]", prog=prog).run()
+  File "/home/user/.cache/pypoetry/virtualenvs/async-sse-example-DQzT8392-py3.13/lib/python3.13/site-packages/gunicorn/app/base.py", line 235, in run
+    super().run()
+  File "/home/user/.cache/pypoetry/virtualenvs/async-sse-example-DQzT8392-py3.13/lib/python3.13/site-packages/gunicorn/app/base.py", line 71, in run
+    Arbiter(self).run()
+  File "/home/user/.cache/pypoetry/virtualenvs/async-sse-example-DQzT8392-py3.13/lib/python3.13/site-packages/gunicorn/arbiter.py", line 201, in run
+    self.manage_workers()
+  File "/home/user/.cache/pypoetry/virtualenvs/async-sse-example-DQzT8392-py3.13/lib/python3.13/site-packages/gunicorn/arbiter.py", line 570, in manage_workers
+    self.spawn_workers()
+  File "/home/user/.cache/pypoetry/virtualenvs/async-sse-example-DQzT8392-py3.13/lib/python3.13/site-packages/gunicorn/arbiter.py", line 641, in spawn_workers
+    self.spawn_worker()
+  File "/home/user/.cache/pypoetry/virtualenvs/async-sse-example-DQzT8392-py3.13/lib/python3.13/site-packages/gunicorn/arbiter.py", line 608, in spawn_worker
+    worker.init_process()
+  File "/home/user/.cache/pypoetry/virtualenvs/async-sse-example-DQzT8392-py3.13/lib/python3.13/site-packages/uvicorn/workers.py", line 75, in init_process
+    super().init_process()
+  File "/home/user/.cache/pypoetry/virtualenvs/async-sse-example-DQzT8392-py3.13/lib/python3.13/site-packages/gunicorn/workers/base.py", line 143, in init_process
+    self.run()
+  File "/home/user/.cache/pypoetry/virtualenvs/async-sse-example-DQzT8392-py3.13/lib/python3.13/site-packages/uvicorn/workers.py", line 107, in run
+    return asyncio.run(self._serve())
+  File "/usr/lib/python3.13/asyncio/runners.py", line 194, in run
+    return runner.run(main)
+  File "/usr/lib/python3.13/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+  File "/usr/lib/python3.13/asyncio/base_events.py", line 707, in run_until_complete
+    self.run_forever()
+  File "/usr/lib/python3.13/asyncio/base_events.py", line 678, in run_forever
+    self._run_once()
+  File "/usr/lib/python3.13/asyncio/base_events.py", line 2033, in _run_once
+    handle._run()
+  File "/usr/lib/python3.13/asyncio/events.py", line 89, in _run
+    self._context.run(self._callback, *self._args)
+  File "/home/user/.cache/pypoetry/virtualenvs/async-sse-example-DQzT8392-py3.13/lib/python3.13/site-packages/django/core/handlers/asgi.py", line 185, in process_request
+    response = await self.run_get_response(request)
+```

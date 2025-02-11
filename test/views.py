@@ -15,6 +15,7 @@ class ServerSentEventRenderer(BaseRenderer):
     format = 'txt'
     def render(self, data, accepted_media_type=None, renderer_context=None):
         traceback.print_stack()
+        breakpoint()
         response = StreamingHttpResponse(data, content_type='text/event-stream')
         response['X-Accel-Buffering'] = 'no'
         response['Cache-Control'] = 'no-cache'
